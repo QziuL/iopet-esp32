@@ -4,15 +4,20 @@
 // =============================================================================
 // Configurações de Rede Wi-Fi
 // =============================================================================
+// Rede Primária (Wi-Fi residencial / local):
 #define WIFI_SSID           "INTELBRAS"
 #define WIFI_PASSWORD       "lrs123456"
+
+// Rede Secundária / Móvel (Hotspot do celular para contingência):
+#define WIFI_BACKUP_SSID     "Luiz S10"
+#define WIFI_BACKUP_PASSWORD "senhaSenha"
 
 // =============================================================================
 // Configurações do Broker RabbitMQ (Interface MQTT)
 // =============================================================================
 // IMPORTANTE: Insira o endereço IP da máquina local ou servidor onde o RabbitMQ está rodando.
 // Não utilize "localhost" ou "127.0.0.1", pois o ESP32 é um dispositivo externo na rede.
-#define MQTT_BROKER_HOST    "10.0.0.138"
+#define MQTT_BROKER_HOST    "82.38.28.144" //"10.0.0.138"
 #define MQTT_BROKER_PORT    1883
 #define MQTT_USER           "guest"
 #define MQTT_PASSWORD       "guest"

@@ -22,10 +22,12 @@ unsigned long ultimaTentativaWifi = 0;
 unsigned long ultimaTentativaMqtt = 0;
 bool estadoLed = false;
 String macAddressStr = "";
+int tentativaRedeIndice = 0; // 0 = Rede Primária, 1 = Rede Móvel (Contingência)
 
 // =============================================================================
 // Protótipos de Funções
 // =============================================================================
+bool tentarConectarRede(const char* ssid, const char* password, unsigned long timeoutMs);
 void conectarWifi();
 void escanearRedesWifi();
 void verificarConexaoWifi();
@@ -122,6 +124,30 @@ void loop() {
 // Funções de Rede e Conectividade
 // =============================================================================
 
+bool tentarConectarRede(const char* ssid, const char* password, unsigned long timeoutMs) {
+  Serial.printf("[WiFi] Conectando à rede: '%s' ...\n", ssid);
+  WiFi.disconnect();
+  delay(100);
+  WiFi.begin(ssid, password);
+
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - inicio < timeoutMs)) {
+    delay(500);
+    Serial.print(".");
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[WiFi] ✅ Conectado com sucesso a '%s'! Endereço IP: %s (Sinal: %d dBm)\n",
+                  ssid, WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    return true;
+  } else {
+    Serial.printf("[WiFi] ❌ Falha na conexão com '%s' (timeout de %lu s).\n", ssid, timeoutMs / 1000);
+    return false;
+  }
+}
+
 void escanearRedesWifi() {
   Serial.println("\n[WiFi Scan] Escaneando redes Wi-Fi 2.4 GHz disponíveis...");
   int n = WiFi.scanNetworks();
@@ -130,22 +156,31 @@ void escanearRedesWifi() {
     Serial.println("[WiFi Scan] Dica: verifique se a antena do ESP32 está desobstruída e se a alimentação USB está estável.");
   } else {
     Serial.printf("[WiFi Scan] %d redes 2.4 GHz encontradas:\n", n);
-    bool redeConfiguradaVisivel = false;
+    bool redePrimariaVisivel = false;
+    bool redeMovelVisivel = false;
     for (int i = 0; i < n; ++i) {
       String ssidAtual = WiFi.SSID(i);
       int rssi = WiFi.RSSI(i);
       Serial.printf("   [%2d] %-25s | Sinal: %3d dBm | Canal: %2d\n",
                     i + 1, ssidAtual.c_str(), rssi, WiFi.channel(i));
       if (ssidAtual.equalsIgnoreCase(WIFI_SSID)) {
-        redeConfiguradaVisivel = true;
+        redePrimariaVisivel = true;
+      }
+      if (ssidAtual.equalsIgnoreCase(WIFI_BACKUP_SSID)) {
+        redeMovelVisivel = true;
       }
     }
-    if (redeConfiguradaVisivel) {
-      Serial.printf("[WiFi Scan] ✅ A rede configurada '%s' foi localizada pelo rádio!\n", WIFI_SSID);
+    if (redePrimariaVisivel) {
+      Serial.printf("[WiFi Scan] ✅ A rede primária '%s' foi localizada pelo rádio!\n", WIFI_SSID);
     } else {
-      Serial.printf("[WiFi Scan] ⚠️ ATENÇÃO: A rede configurada '%s' NÃO foi encontrada pelo rádio 2.4 GHz!\n", WIFI_SSID);
-      Serial.println("             O ESP32-C3 NÃO enxerga redes de 5 GHz. Se estiver usando Hotspot do celular,");
-      Serial.println("             ative 'Maximizar Compatibilidade' (iPhone) ou 'Banda do AP: 2.4 GHz' (Android).");
+      Serial.printf("[WiFi Scan] ⚠️ A rede primária '%s' NÃO foi encontrada no momento.\n", WIFI_SSID);
+    }
+
+    if (redeMovelVisivel) {
+      Serial.printf("[WiFi Scan] ✅ A rede móvel de contingência '%s' foi localizada pelo rádio!\n", WIFI_BACKUP_SSID);
+    } else {
+      Serial.printf("[WiFi Scan] ℹ️ A rede móvel '%s' não foi vista (normal se o hotspot do celular estiver desativado).\n", WIFI_BACKUP_SSID);
+      Serial.println("             Se for utilizar Hotspot 4G/5G, certifique-se de ativar 'Banda AP: 2.4 GHz' no smartphone.");
     }
   }
   Serial.println("--------------------------------------------------\n");
@@ -155,21 +190,17 @@ void conectarWifi() {
   // Ajusta a potência de transmissão de RF para reduzir picos de corrente no regulador USB
   WiFi.setTxPower(WIFI_POWER_15dBm);
 
-  Serial.printf("[WiFi] Conectando a rede: '%s' ...\n", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.println("[WiFi] Iniciando conexão... Prioridade 1: Rede Primária.");
+  bool conectado = tentarConectarRede(WIFI_SSID, WIFI_PASSWORD, 12000);
 
-  unsigned long inicio = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - inicio < 15000)) {
-    delay(500);
-    Serial.print(".");
-    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+  if (!conectado) {
+    Serial.printf("[WiFi] ⚠️ Rede primária '%s' não disponível. Tentando conectar na rede móvel: '%s'...\n",
+                  WIFI_SSID, WIFI_BACKUP_SSID);
+    conectado = tentarConectarRede(WIFI_BACKUP_SSID, WIFI_BACKUP_PASSWORD, 12000);
   }
-  Serial.println();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[WiFi] ✅ Conectado com sucesso! Endereço IP: %s\n", WiFi.localIP().toString().c_str());
-  } else {
-    Serial.println("[WiFi] ❌ Falha na conexão inicial (timeout de 15s). Tentativas em segundo plano continuarão.");
+  if (!conectado) {
+    Serial.println("[WiFi] ❌ Nenhuma das redes respondeu na inicialização. Tentativas em segundo plano continuarão.");
   }
 }
 
@@ -178,10 +209,22 @@ void verificarConexaoWifi() {
     unsigned long agora = millis();
     if (agora - ultimaTentativaWifi >= 10000) {
       ultimaTentativaWifi = agora;
-      Serial.printf("[WiFi] Reconectando à rede '%s'...\n", WIFI_SSID);
-      WiFi.disconnect();
-      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+      if (tentativaRedeIndice == 0) {
+        Serial.printf("[WiFi] Tentativa de reconexão à rede primária '%s'...\n", WIFI_SSID);
+        WiFi.disconnect();
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        tentativaRedeIndice = 1; // Se falhar nesta, a próxima tenta na rede móvel
+      } else {
+        Serial.printf("[WiFi] Rede primária indisponível. Tentativa de reconexão à rede móvel '%s'...\n", WIFI_BACKUP_SSID);
+        WiFi.disconnect();
+        WiFi.begin(WIFI_BACKUP_SSID, WIFI_BACKUP_PASSWORD);
+        tentativaRedeIndice = 0; // Se falhar na móvel, a próxima volta a testar a primária
+      }
     }
+  } else {
+    // Quando conectado com sucesso, reseta para priorizar a primária em caso de queda futura
+    tentativaRedeIndice = 0;
   }
 }
 
